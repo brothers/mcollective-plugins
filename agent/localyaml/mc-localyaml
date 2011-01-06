@@ -1,0 +1,55 @@
+#!/usr/bin/env ruby
+
+#
+# Client to run the external node classifier and push YAML to the agent.
+#
+
+require 'puppet'
+require 'mcollective'
+include MCollective::RPC
+
+# Find external node classifier
+Puppet.parse_config
+if Puppet[:external_nodes] != nil and Puppet[:external_nodes] != 'none'
+    external_nodes = Puppet[:external_nodes]
+else
+    puts("Error parsing Puppet configuration for external_nodes setting.")
+    exit 1
+end
+
+def run_command(cmd, *args)
+    IO.popen('-') {|f| f ? f.read : exec(cmd, *args)}
+end
+
+oparser = MCollective::Optionparser.new({}, "filter")
+
+options = oparser.parse{|parser, options|
+    parser.define_head "Push external node classifier YAML to local file."
+    parser.banner = "Usage: mc-localyaml [options] [filters]"
+}
+
+begin
+    # Discover all nodes
+    written = 0
+    count = 0
+    discovery = rpcclient("discovery", :options => options)
+    discovery.agent_filter("localyaml")
+    discovery.ping.each do |pong|
+        id = pong[:sender]
+        puts("Writing #{id}")
+        # Send classifier output to localyaml agent
+        localyaml = rpcclient("localyaml", :options => options)
+        node = run_command("#{external_nodes} #{id}")
+        localyaml.options[:filter]["agent"] = ["localyaml"]
+        localyaml.options[:filter]["identity"] = [id]
+        localyaml.save(:node => node).each do |result|
+            written += result[:data][:written]
+            count += 1
+        end
+    end
+    printf("Wrote %s of %s.\n", written, count)
+rescue Exception => e
+    raise
+end
+
+# vi:tabstop=4:expandtab:ai
